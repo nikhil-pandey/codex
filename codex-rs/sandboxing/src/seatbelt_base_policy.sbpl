@@ -58,6 +58,7 @@
   (sysctl-name "kern.hostname")
   (sysctl-name "kern.maxfilesperproc")
   (sysctl-name "kern.maxproc")
+  (sysctl-name "kern.nisdomainname")
   (sysctl-name "kern.osproductversion")
   (sysctl-name "kern.osrelease")
   (sysctl-name "kern.ostype")
