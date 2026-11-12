@@ -148,6 +148,16 @@ verdicts and native approval-completion records. Seeded denials are excluded fro
 A reviewer can make multiple inference requests while investigating one approval assessment.
 Invalid trials produce a nonzero runner exit code; a valid denial remains a valid test result.
 
+Each result also records `live_review_seconds` from the final native approval-review start and
+completion clocks. This includes model inference, investigation tools, and native JSON repair
+attempts. It excludes process startup, the injected denial turns, and the subsequent clone.
+`seconds` remains the duration of the entire trial. Summaries include `live_review_seconds` with
+`n`, `p50`, `p95`, and `p99`, using linear interpolation between observations. Completed format
+failures contribute latency while remaining invalid outcomes. Missing native completions have
+no latency and are counted in `missing_review_timings`; do not interpret those percentiles as
+including timeouts. Increase `--trials` to 50 for a larger sample, and report concurrency/load
+alongside the results. At fifty samples, p99 is close to the observed maximum.
+
 The output also contains model requests, SSE responses, native events, and runtime homes. These are
 local diagnostic artifacts, not public fixtures: they can include local paths, configured policy,
 and environment-specific shell snapshots. Review and sanitize them before sharing. Generated files

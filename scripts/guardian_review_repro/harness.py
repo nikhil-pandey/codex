@@ -308,6 +308,9 @@ def run_trial(
         server.server_close()
 
     result["seconds"] = round(time.monotonic() - started, 2)
+    result["live_review_seconds"] = read_live_review_seconds(
+        directory, options.seed_denials
+    )
     write_json(directory / "result.json", result)
     print(json.dumps(stdout_record(result)), flush=True)
     return result
@@ -888,7 +891,55 @@ def count_live_outcomes(
         else:
             outcome = result["live_verdicts"][0]["outcome"]
             counts[result["model"]][outcome] += 1
+    for model in models:
+        # Include completed format failures in latency, while keeping them invalid outcomes.
+        # An absent native completion has no response time and is counted separately.
+        model_results = [result for result in results if result["model"] == model]
+        durations = [
+            result["live_review_seconds"]
+            for result in model_results
+            if result.get("live_review_seconds") is not None
+        ]
+        counts[model]["live_review_seconds"] = latency_percentiles(durations)
+        counts[model]["missing_review_timings"] = len(model_results) - len(durations)
     return counts
+
+
+def read_live_review_seconds(directory: Path, seed_denials: int) -> float | None:
+    """Measure the final live assessment using native clocks, excluding seeds and setup."""
+    path = directory / "events.jsonl"
+    if not path.exists():
+        return None
+    started = []
+    completed = {}
+    for line in path.read_text().splitlines():
+        event = json.loads(line)
+        params = event.get("params", {})
+        if event["method"] == "item/autoApprovalReview/started":
+            started.append(params["reviewId"])
+        elif event["method"] == NATIVE_REVIEW_COMPLETED_EVENT:
+            completed[params["reviewId"]] = params
+    if len(started) != seed_denials + 1:
+        return None
+    final = completed.get(started[-1])
+    if final is None:
+        return None
+    return (final["completedAtMs"] - final["startedAtMs"]) / 1000
+
+
+def latency_percentiles(durations: list[float]) -> dict[str, Any]:
+    """Use linear interpolation (R-7); fifty samples place p99 near the observed maximum."""
+    ordered = sorted(durations)
+    stats = {"n": len(ordered)}
+    for name, probability in (("p50", 0.50), ("p95", 0.95), ("p99", 0.99)):
+        if not ordered:
+            stats[name] = None
+            continue
+        index = (len(ordered) - 1) * probability
+        lower = int(index)
+        upper = min(lower + 1, len(ordered) - 1)
+        stats[name] = ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
+    return stats
 
 
 def stdout_record(result: dict[str, Any]) -> dict[str, Any]:
