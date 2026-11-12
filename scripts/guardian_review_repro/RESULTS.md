@@ -9,16 +9,23 @@ supplied locally and are not part of this repository.
 | --- | --- | ---: | ---: | ---: |
 | Fresh conversation, zero seeds | gpt-6-luna | 10 | 0 | 0 |
 | Fresh conversation, zero seeds | gpt-6.1-sol | 10 | 0 | 0 |
+| Fresh conversation, zero seeds | gpt-6.1-terra | 10 | 0 | 0 |
 | Retained conversation, three seeds | gpt-6-luna | 2 | 8 | 0 |
 | Retained conversation, three seeds | gpt-6.1-sol | 10 | 0 | 0 |
+| Retained conversation, three seeds | gpt-6.1-terra | 10 | 0 | 0 |
 
 Each row contains ten independent native app-server sessions. In the seeded condition, the first
 three denials per session are mock replies deliberately supplied by the test server; only the
 fourth, live assessment is counted. New explicit user authorization precedes each retry.
 
 The runner checked the model JSON verdict against the native approval-completion event for every
-live assessment. There were no invalid trials. The 40 live outcomes above are observations, not
+live assessment. There were no invalid trials. The 60 live outcomes above are observations, not
 guarantees of future outcomes or of availability on a different provider.
+
+Terra was tested in a subsequent run with the same SDK runner, binary, policy, seed count, and
+`low` reasoning effort. It approved all twenty live assessments, including all ten attempts after
+the three injected denials. This is recovery behavior in this fixture, not a general reliability
+or throughput benchmark.
 
 An earlier run using the handwritten app-server transport observed ten seeded Luna denials out
 of ten; the SDK run above observed eight. Both observed ten seeded Sol approvals and all fresh
