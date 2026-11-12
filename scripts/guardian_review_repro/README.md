@@ -3,7 +3,7 @@
 This standalone example uses the [Codex Python SDK](../../sdk/python/README.md) to ask the native
 Rust harness to review a clone of the public `octocat/Hello-World` repository. A small Python HTTP
 fixture supplies deterministic parent-model replies and forwards the final reviewer request to a
-configurable Responses endpoint.
+configurable Responses endpoint, or an explicitly adapted Chat Completions endpoint.
 
 The seeded case deliberately injects three incorrect reviewer denials before requesting one live
 judgment. A fresh control injects none. This tests recovery after a bad denial, **not the first bad
@@ -60,9 +60,27 @@ Use a new output directory for each run. Select another credential variable with
 another compatible endpoint with `--upstream URL`, or a locally built binary with `--codex PATH`.
 The runner does not install a proxy or require the endpoint to expose `/models`.
 
+For providers that offer Chat Completions only, add `--upstream-api chat-completions` and set
+`--upstream` to the base preceding `/chat/completions`. The adapter in `chat_completions.py` converts
+messages, investigation tools, tool results, and the final verdict schema. It adds a format-only
+instruction requesting bare JSON because some compatible providers ignore `response_format`.
+Provider-specific encrypted reasoning cannot be carried across protocols. Assistant prose returned
+alongside investigation tool calls is omitted from the native response; the tool calls are retained.
+These are adapted
+experiments; they do not establish native Codex reviewer compatibility. Report them separately from
+unmodified Responses runs. Chat requests are non-streaming by default; `--chat-stream` enables SSE
+and records the selected mode in the run manifest.
+
+Use `--reasoning-effort medium` for an explicit Medium comparison, or `--reasoning-effort default`
+to omit the effort field for a provider that does not advertise configurable reasoning. The default
+is Low. Native auto-review can pin Low independently of the parent configuration, so the fixture
+sets the selected effort on the actual upstream request. Both the original native request and the
+sent request are retained; changing effort is an experimental intervention.
+
 ## SDK implementation
 
-`harness.py` is the complete runner. Start with `main()`, `run_all_trials()`, and `run_trial()` near
+`harness.py` orchestrates the runner; `chat_completions.py` contains the optional protocol adapter.
+Start with `main()`, `run_all_trials()`, and `run_trial()` near
 the top to follow the experiment. The SDK session, HTTP fixture, and result validation follow in
 separate sections; `ExperimentOptions` and `FixtureState` name the shared settings and per-trial state.
 

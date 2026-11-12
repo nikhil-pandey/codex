@@ -25,8 +25,9 @@ Python 3.14+ handles Codex's optional zstd request compression with the stdlib.
 #    denial. That denial says escalation is prohibited, although the parent policy is
 #    on-request. This is fault injection, not model output, and it is never counted as a result.
 #
-# 3. Real final review. Every later reviewer request is forwarded with its body unchanged to
-#    --upstream. The reviewer may call investigation tools, so one live assessment can require
+# 3. Real final review. Every later reviewer request is forwarded to --upstream. Responses at
+#    the default Low effort keeps the native body; other protocols/efforts are explicit options.
+#    The reviewer may call investigation tools, so one live assessment can require
 #    several requests. Its single final JSON verdict is the measured result. That verdict must
 #    agree with the native "auto-approval completed" event.
 #
@@ -59,6 +60,7 @@ from typing import Any
 # Use the SDK from this checkout; dependency installation is left to the caller.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk/python/src"))
 
+from chat_completions import chat_request, read_completion, response_events
 from openai_codex import CodexConfig, CodexError, Thread
 from openai_codex import __version__ as sdk_version
 from openai_codex.client import CodexClient
@@ -127,6 +129,9 @@ class ExperimentOptions:
     upstream: str
     key_env: str
     seed_denials: int
+    upstream_api: str = "responses"
+    reasoning_effort: str = "low"
+    chat_stream: bool = False
 
 
 @dataclass
@@ -141,9 +146,13 @@ class FixtureState:
     upstream: str
     key_env: str
     seed_denials: int
+    upstream_api: str = "responses"
+    reasoning_effort: str = "low"
+    chat_stream: bool = False
     review_count: int = 0
     parent_count: int = 0
     errors: list[str] = field(default_factory=list)
+    sent_reasoning_efforts: list[str] = field(default_factory=list)
 
 
 # --- Experiment flow: start reading here ---
@@ -170,6 +179,9 @@ def main() -> None:
         upstream=args.upstream,
         key_env=args.key_env,
         seed_denials=args.seed_denials,
+        upstream_api=args.upstream_api,
+        reasoning_effort=args.reasoning_effort,
+        chat_stream=args.chat_stream,
     )
     # A new directory each run keeps raw artifacts from different runs apart.
     options.out.mkdir(parents=True, exist_ok=False)
@@ -230,11 +242,18 @@ def run_trial(
         upstream=options.upstream,
         key_env=options.key_env,
         seed_denials=options.seed_denials,
+        upstream_api=options.upstream_api,
+        reasoning_effort=options.reasoning_effort,
+        chat_stream=options.chat_stream,
     )
     server = FixtureServer(state)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    overrides = build_config_overrides(catalog_path, server.server_port)
+    overrides = build_config_overrides(
+        catalog_path,
+        server.server_port,
+        "low" if options.reasoning_effort == "default" else options.reasoning_effort,
+    )
     config_override_args = []
     for key, value in overrides.items():
         config_override_args.append(key + "=" + json.dumps(value))
@@ -266,6 +285,10 @@ def run_trial(
             "live_verdicts": live_verdicts,
             "native_assessments": native_reviews,
             "errors": state.errors,
+            "upstream_api": options.upstream_api,
+            "reasoning_effort": options.reasoning_effort,
+            "sent_reasoning_efforts": state.sent_reasoning_efforts,
+            "chat_stream": options.chat_stream,
         }
         result["valid"] = is_valid_trial(
             state.errors,
@@ -308,6 +331,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--upstream", default="http://127.0.0.1:8080/v1")
     parser.add_argument("--key-env", default="OPENAI_API_KEY")
+    parser.add_argument(
+        "--upstream-api", choices=("responses", "chat-completions"), default="responses"
+    )
+    parser.add_argument(
+        "--chat-stream",
+        action="store_true",
+        help="Use streaming Chat Completions instead of JSON responses.",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("default", "low", "medium", "high", "xhigh", "max"),
+        default="low",
+    )
     parser.add_argument(
         "--seed-denials",
         type=int,
@@ -374,6 +410,9 @@ def write_manifest(options: ExperimentOptions, catalog: dict[str, Any]) -> None:
             "synthetic_parent": True,
             "seeded_incorrect_review_verdicts": options.seed_denials,
             "transport": "python-sdk/app-server",
+            "upstream_api": options.upstream_api,
+            "reasoning_effort": options.reasoning_effort,
+            "chat_stream": options.chat_stream,
         },
     )
 
@@ -402,11 +441,13 @@ def write_trial_catalog(
     return catalog_path
 
 
-def build_config_overrides(catalog_path: Path, fixture_port: int) -> dict[str, Any]:
+def build_config_overrides(
+    catalog_path: Path, fixture_port: int, reasoning_effort: str = "low"
+) -> dict[str, Any]:
     overrides: dict[str, Any] = {
         "model_provider": "repro",
         "model_catalog_json": str(catalog_path),
-        "model_reasoning_effort": "low",
+        "model_reasoning_effort": reasoning_effort,
         "default_permissions": ":workspace",
         "approval_policy": "on-request",
         "approvals_reviewer": "auto_review",
@@ -644,22 +685,68 @@ def answer_reviewer_request(
 
 
 def forward_to_upstream(state: FixtureState, body: dict[str, Any]) -> tuple[bytes, str]:
-    """Send a live reviewer request upstream without changing its body.
+    """Forward Responses unchanged, or explicitly adapt to Chat Completions.
 
     The credential is read from the environment for this header only. It is never written to
     disk or printed.
     """
+    endpoint = "/responses"
+    upstream_body = body
+    tool_names = {}
+    # Native auto-review can pin Low independently of the parent setting. Explicit effort
+    # comparisons therefore set the live API field and retain both native and sent requests.
+    native_effort = body.get("reasoning", {}).get("effort")
+    if native_effort != state.reasoning_effort:
+        upstream_body = copy.deepcopy(body)
+        reasoning = upstream_body.setdefault("reasoning", {})
+        if state.reasoning_effort == "default":
+            reasoning.pop("effort", None)
+        else:
+            reasoning["effort"] = state.reasoning_effort
+    if state.upstream_api == "chat-completions":
+        endpoint = "/chat/completions"
+        upstream_body, tool_names = chat_request(
+            upstream_body, stream=state.chat_stream
+        )
+        sent_effort = upstream_body.get("reasoning_effort", "default")
+    else:
+        sent_effort = upstream_body.get("reasoning", {}).get("effort", "default")
+    state.sent_reasoning_efforts.append(sent_effort)
+    write_json(
+        state.directory / f"upstream-{state.review_count:02d}-request.json",
+        upstream_body,
+    )
     request = urllib.request.Request(
-        state.upstream.rstrip("/") + "/responses",
-        data=json.dumps(body).encode(),
+        state.upstream.rstrip("/") + endpoint,
+        data=json.dumps(upstream_body).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + os.environ[state.key_env],
         },
     )
-    with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
-        payload = response.read()
-        content_type = response.headers.get("Content-Type", SSE_CONTENT_TYPE)
+    try:
+        with urllib.request.urlopen(
+            request, timeout=UPSTREAM_TIMEOUT_SECONDS
+        ) as response:
+            payload = response.read()
+            content_type = response.headers.get("Content-Type", SSE_CONTENT_TYPE)
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")
+        (state.directory / f"upstream-{state.review_count:02d}-error.txt").write_text(
+            detail
+        )
+        raise RuntimeError(f"Upstream HTTP {error.code}: {detail[:1200]}") from error
+    if state.upstream_api == "chat-completions":
+        (
+            state.directory / f"upstream-{state.review_count:02d}-response.sse"
+        ).write_bytes(payload)
+        completion = read_completion(payload)
+        write_json(
+            state.directory / f"upstream-{state.review_count:02d}-response.json",
+            completion,
+        )
+        payload = encode_sse(response_events(completion, tool_names))
+        content_type = SSE_CONTENT_TYPE
     return payload, content_type
 
 
@@ -701,6 +788,16 @@ def encode_sse(events: list[dict[str, Any]]) -> bytes:
 # --- Read, validate, and report the outcomes ---
 
 
+def unique_json_keys(pairs):
+    """Match native JSON parsing: duplicate fields do not make a valid verdict."""
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate JSON field: " + key)
+        value[key] = item
+    return value
+
+
 def read_reviewer_verdicts(directory: Path) -> list[Any]:
     """Parse the final JSON verdict from each saved reviewer response, in request order.
 
@@ -721,7 +818,19 @@ def read_reviewer_verdicts(directory: Path) -> list[Any]:
                 continue
             for block in item.get("content", []):
                 if block.get("type") == "output_text":
-                    verdicts.append(json.loads(block["text"]))
+                    # The native harness may ask a model to repair a malformed response.
+                    # Count actual verdicts, not an earlier schema echo or prose response.
+                    try:
+                        value = json.loads(
+                            block["text"], object_pairs_hook=unique_json_keys
+                        )
+                    except ValueError:
+                        continue
+                    if isinstance(value, dict) and value.get("outcome") in (
+                        "allow",
+                        "deny",
+                    ):
+                        verdicts.append(value)
     return verdicts
 
 
@@ -745,6 +854,10 @@ def is_valid_trial(
         return False
     # Codex's own final assessment must match the live verdict it received.
     native_status = native_reviews[-1]["status"]
+    if native_reviews[-1].get("rationale", "").startswith(
+        "Automatic approval review failed:"
+    ):
+        return False
     expected_status = "approved" if live_verdicts[0]["outcome"] == "allow" else "denied"
     return native_status == expected_status
 
