@@ -62,8 +62,12 @@ The runner does not install a proxy or require the endpoint to expose `/models`.
 
 ## SDK implementation
 
-`harness.py` is the complete runner. `run_session()` uses the SDK's `CodexClient`, `CodexConfig`,
-`Thread`, and `turn().stream()` APIs to manage the runtime, retain a thread, and collect approval
+`harness.py` is the complete runner. Start with `main()`, `run_all_trials()`, and `run_trial()` near
+the top to follow the experiment. The SDK session, HTTP fixture, and result validation follow in
+separate sections; `ExperimentOptions` and `FixtureState` name the shared settings and per-trial state.
+
+`run_native_session()` uses the SDK's `CodexClient`, `CodexConfig`, `Thread`, and `turn().stream()`
+APIs to manage the runtime, retain a thread, and collect approval
 events. There is no handwritten JSON-RPC transport or subprocess event pump. `CodexClient` lets
 the fixture reject unexpected human-approval requests instead of implicitly accepting them.
 

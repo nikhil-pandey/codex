@@ -27,6 +27,11 @@ Terra was tested in a subsequent run with the same SDK runner, binary, policy, s
 the three injected denials. This is recovery behavior in this fixture, not a general reliability
 or throughput benchmark.
 
+After the readability refactor, two fresh and two seeded trials were rerun for each of the three
+models. All twelve trials were valid: all fresh reviews approved, seeded Terra and Sol reviews
+approved, and seeded Luna reviews denied. These regression checks are separate from the ten-trial
+cohorts in the table above.
+
 An earlier run using the handwritten app-server transport observed ten seeded Luna denials out
 of ten; the SDK run above observed eight. Both observed ten seeded Sol approvals and all fresh
 approvals. These separate runs do not establish that the SDK caused the difference, and the fixture
