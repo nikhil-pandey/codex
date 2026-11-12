@@ -1,8 +1,9 @@
 # Auto-review recovery reproduction
 
-This standalone example asks the native Rust Codex harness to review a clone of the public
-`octocat/Hello-World` repository. A small Python server supplies deterministic parent-model replies
-and forwards the final reviewer request to a configurable Responses endpoint.
+This standalone example uses the [Codex Python SDK](../../sdk/python/README.md) to ask the native
+Rust harness to review a clone of the public `octocat/Hello-World` repository. A small Python HTTP
+fixture supplies deterministic parent-model replies and forwards the final reviewer request to a
+configurable Responses endpoint.
 
 The seeded case deliberately injects three incorrect reviewer denials before requesting one live
 judgment. A fresh control injects none. This tests recovery after a bad denial, **not the first bad
@@ -15,7 +16,8 @@ Only synthetic prompts, public repository URLs, and the runner are tracked here.
 ## Requirements
 
 - Codex CLI with `debug models --bundled` and the app-server auto-review APIs. Tested with 0.167.2.
-- Python 3.14 or newer; dependencies are entirely in the standard library.
+- Python 3.14 or newer with the SDK's `pydantic>=2.12` and `packaging>=26.2` dependencies available
+  to that interpreter. The runner imports the SDK source from this checkout; it installs nothing.
 - Git and network access to the public example repository.
 - A Responses provider exposing your chosen reviewer models and supporting the requests generated
   by that Codex build. The examples use a localhost provider; its installation is outside this setup.
@@ -57,6 +59,17 @@ python3 scripts/guardian_review_repro/harness.py \
 Use a new output directory for each run. Select another credential variable with `--key-env NAME`,
 another compatible endpoint with `--upstream URL`, or a locally built binary with `--codex PATH`.
 The runner does not install a proxy or require the endpoint to expose `/models`.
+
+## SDK implementation
+
+`harness.py` is the complete runner. `run_session()` uses the SDK's `CodexClient`, `CodexConfig`,
+`Thread`, and `turn().stream()` APIs to manage the runtime, retain a thread, and collect approval
+events. There is no handwritten JSON-RPC transport or subprocess event pump. `CodexClient` lets
+the fixture reject unexpected human-approval requests instead of implicitly accepting them.
+
+The SDK still launches the native Codex app-server. The HTTP fixture is needed to inject the
+incorrect initial verdicts; replacing that fixture with ordinary model calls would remove the
+condition being tested. The only direct CLI calls read the binary version and bundled catalog.
 
 ## What is exercised
 
