@@ -798,6 +798,21 @@ def unique_json_keys(pairs):
     return value
 
 
+def parse_verdict_text(text):
+    """Follow native assessment.rs: try JSON, then the outermost brace-delimited slice.
+
+    Native review tolerates prose around a JSON verdict, but still rejects duplicate fields.
+    Its final approval event remains authoritative when validating the parsed verdict.
+    """
+    try:
+        return json.loads(text, object_pairs_hook=unique_json_keys)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or start >= end:
+            raise ValueError("No JSON assessment") from None
+        return json.loads(text[start : end + 1], object_pairs_hook=unique_json_keys)
+
+
 def read_reviewer_verdicts(directory: Path) -> list[Any]:
     """Parse the final JSON verdict from each saved reviewer response, in request order.
 
@@ -821,9 +836,7 @@ def read_reviewer_verdicts(directory: Path) -> list[Any]:
                     # The native harness may ask a model to repair a malformed response.
                     # Count actual verdicts, not an earlier schema echo or prose response.
                     try:
-                        value = json.loads(
-                            block["text"], object_pairs_hook=unique_json_keys
-                        )
+                        value = parse_verdict_text(block["text"])
                     except ValueError:
                         continue
                     if isinstance(value, dict) and value.get("outcome") in (
